@@ -223,8 +223,7 @@ function sendOrder(e){
 `━━━━━━━━━━━━━━━━━━━━\n\n`+
 `M50 • Luxury Fragrances`;
    const waUrl='https://wa.me/919427589717?text='+encodeURIComponent(billText);
-   // Direct WhatsApp flow: save the fixed bill image, then open ONLY M50's WhatsApp number.
-   // A normal webpage cannot silently attach/send a local image inside WhatsApp.
+   // Open ONLY the M50 WhatsApp contact. The bill image is downloaded and copied when the browser allows it.
    const billFile = new File([blob], orderNo+'.png', {type:'image/png'});
    try {
      const a=document.createElement('a');
@@ -246,17 +245,13 @@ function sendOrder(e){
 
    // Open the M50 WhatsApp number directly — no "Send to..." contact picker.
    const encodedBill=encodeURIComponent(billText);
-   const waWeb='https://web.whatsapp.com/send?phone=919427589717&text='+encodedBill;
    const isMobile=/Android|iPhone|iPad|iPod|Windows Phone/i.test(navigator.userAgent);
    if(isMobile){
-     // Phone: open the installed WhatsApp app directly.
-     const appUrl='whatsapp://send?phone=919427589717&text='+encodedBill;
-     const fallbackTimer=setTimeout(()=>{ window.location.href=waWeb; },1800);
-     window.location.href=appUrl;
-     window.addEventListener('pagehide',()=>clearTimeout(fallbackTimer),{once:true});
+     // Phone: wa.me lets the OS open the installed WhatsApp app and targets only M50's number.
+     window.location.href='https://wa.me/919427589717?text='+encodedBill;
    }else{
-     // Computer: open WhatsApp Web directly in the browser.
-     window.location.href=waWeb;
+     // Computer: open WhatsApp Web directly for M50's number.
+     window.location.href='https://web.whatsapp.com/send?phone=919427589717&text='+encodedBill;
    }
  },'image/png');
 }
