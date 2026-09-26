@@ -309,10 +309,71 @@ document.addEventListener('keydown',e=>{if(modal.classList.contains('open')){if(
   </div>
   <div class="m50-admin-actions"><button class="m50-admin-btn primary" onclick="m50AddProduct()">Add Product</button><button class="m50-admin-btn" onclick="m50CloseAdmin()">Close</button></div>
   <div class="m50-admin-card"><h4>Remove Products</h4><div id="m50CustomList"></div><button class="m50-admin-btn" onclick="m50ResetCustomProducts()">Remove All Added Products</button><div class="m50-file-note" style="margin-top:8px">Existing products can be removed and restored. Added products can be removed permanently from this browser.</div></div>
-  <p style="font-size:12px">Note: This admin stores edits in this browser's localStorage. It is not server-side security and edits do not automatically sync to other visitors.</p>
+  <p style="font-size:12px">Note: Admin changes are saved to Supabase so they sync across devices. Local storage is used as a temporary browser cache.</p>
  </div>
 </div>
 
+<script id="m50-supabase-script">
+// M50 Supabase connection: browser-safe Publishable key + RLS-protected Product table.
+const M50_SUPABASE_URL='https://tebmizhvujeiiyurzole.supabase.co';
+const M50_SUPABASE_KEY='sb_publishable_-cMZZrQQ4kJGRmbyWXEgiw_E1udakJE';
+const M50_SUPABASE_TABLE='Product';
+async function m50SupabaseRequest(path, options={}){
+  const headers=Object.assign({'apikey':M50_SUPABASE_KEY,'Authorization':'Bearer '+M50_SUPABASE_KEY,'Content-Type':'application/json','Accept':'application/json'},options.headers||{});
+  const r=await fetch(M50_SUPABASE_URL+'/rest/v1/'+path,Object.assign({},options,{headers}));
+  const text=await r.text();
+  let data=null; try{data=text?JSON.parse(text):null}catch(e){data=text}
+  if(!r.ok) throw new Error((data&&data.message)||text||('Supabase HTTP '+r.status));
+  return data;
+}
+async function m50SupabaseList(){return await m50SupabaseRequest(encodeURIComponent(M50_SUPABASE_TABLE)+'?select=*');}
+async function m50SupabaseFindByName(name){
+  const rows=await m50SupabaseRequest(encodeURIComponent(M50_SUPABASE_TABLE)+'?select=*&name=eq.'+encodeURIComponent(name)+'&limit=1');
+  return Array.isArray(rows)&&rows[0]?rows[0]:null;
+}
+async function m50SupabaseInsert(item){
+  return await m50SupabaseRequest(encodeURIComponent(M50_SUPABASE_TABLE),{method:'POST',headers:{'Prefer':'return=representation'},body:JSON.stringify(item)});
+}
+async function m50SupabaseUpdate(id,item){
+  return await m50SupabaseRequest(encodeURIComponent(M50_SUPABASE_TABLE)+'?id=eq.'+encodeURIComponent(id),{method:'PATCH',headers:{'Prefer':'return=representation'},body:JSON.stringify(item)});
+}
+async function m50SupabaseDelete(id){
+  return await m50SupabaseRequest(encodeURIComponent(M50_SUPABASE_TABLE)+'?id=eq.'+encodeURIComponent(id),{method:'DELETE',headers:{'Prefer':'return=minimal'}});
+}
+const M50_BASE_PRODUCTS={
+ 'M50 WANTED':{'20 ML':'250','50 ML':'500','100 ML':'1000'},
+ 'COOL WATER':{'20 ML':'100','50 ML':'250','100 ML':'500'},
+ 'FLORA':{'20 ML':'80','50 ML':'160','100 ML':'240'}
+};
+function m50RowToLocal(r){return {name:r.name||'',category:r.category||'Unisex',desc:r.description||'',note1:r.note1||'',note2:r.note2||'',note3:r.note3||'',thumb:r.thumbnail||'',gallery:Array.isArray(r.gallery)?r.gallery:[],prices:{'20 ML':String(r.price20??0),'50 ML':String(r.price50??0),'100 ML':String(r.price100??0)},supabase_id:r.id};}
+async function m50SyncFromSupabase(){
+  try{
+    const rows=await m50SupabaseList();
+    const baseNames=Object.keys(M50_BASE_PRODUCTS).map(x=>x.toLowerCase());
+    const custom=rows.filter(r=>r.name && !baseNames.includes(String(r.name).toLowerCase())).map(m50RowToLocal);
+    localStorage.setItem('m50_custom_products_v2',JSON.stringify(custom));
+    const prices=JSON.parse(localStorage.getItem('m50_price_overrides_v2')||'{}');
+    const galleries=JSON.parse(localStorage.getItem('m50_gallery_overrides_v2')||'{}');
+    rows.forEach(r=>{
+      const n=String(r.name||'');
+      if(M50_BASE_PRODUCTS[n]){
+        prices[n]={'20 ML':String(r.price20??M50_BASE_PRODUCTS[n]['20 ML']),'50 ML':String(r.price50??M50_BASE_PRODUCTS[n]['50 ML']),'100 ML':String(r.price100??M50_BASE_PRODUCTS[n]['100 ML'])};
+        const key=n.toLowerCase().replaceAll(' ','_');
+        galleries[key]={thumb:r.thumbnail||'',gallery:Array.isArray(r.gallery)?r.gallery:[]};
+      }
+    });
+    localStorage.setItem('m50_price_overrides_v2',JSON.stringify(prices));
+    localStorage.setItem('m50_gallery_overrides_v2',JSON.stringify(galleries));
+    return true;
+  }catch(e){console.error('M50 Supabase sync failed:',e);return false;}
+}
+async function m50EnsureBaseRow(name){
+  let row=await m50SupabaseFindByName(name);
+  if(row)return row;
+  const data={name,category:name==='FLORA'?'For Women':'For Men',description:'',note1:'',note2:'',note3:'',price20:Number(M50_BASE_PRODUCTS[name]['20 ML']),price50:Number(M50_BASE_PRODUCTS[name]['50 ML']),price100:Number(M50_BASE_PRODUCTS[name]['100 ML']),thumbnail:'',gallery:[]};
+  const out=await m50SupabaseInsert(data); return Array.isArray(out)?out[0]:out;
+}
+</script>
 <script id="m50-admin-script">
 (function(){
  const ADMIN_PASSWORD='Vamja@20032008252188971';
@@ -353,12 +414,12 @@ document.addEventListener('keydown',e=>{if(modal.classList.contains('open')){if(
  function hiddenProducts(){return read(STORAGE_HIDDEN,[])}
  function applyHiddenProducts(){const hidden=hiddenProducts().map(x=>String(x).toLowerCase());document.querySelectorAll('.card').forEach(card=>{const h=card.querySelector('h3');if(!h)return;const n=h.textContent.trim().toLowerCase();card.style.display=hidden.includes(n)?'none':''});m50RenderCustomCards();}
  function applyPrices(){const prices=allProducts();Object.keys(prices).forEach(name=>{const p=prices[name];document.querySelectorAll('.price').forEach(btn=>{const b=btn.querySelector('b'),sp=btn.querySelector('span');if(!b||!sp)return;const size=b.textContent.trim(),oc=btn.getAttribute('onclick')||'';if(oc.indexOf(name)>=0&&p[size]!=null){sp.textContent='₹'+p[size];btn.setAttribute('onclick','openOrder('+JSON.stringify(name)+','+JSON.stringify(size)+','+JSON.stringify(String(p[size]))+')')}})});const sel=document.getElementById('product');if(sel){sel.innerHTML='';Object.keys(prices).forEach(n=>{const o=document.createElement('option');o.value=n;o.textContent=n;sel.appendChild(o)});if(typeof updatePrice==='function')updatePrice()}}
- window.m50SavePrices=function(){const ov=read(STORAGE_PRICES,{});['M50 WANTED','COOL WATER','FLORA'].forEach(n=>{const id=n.replaceAll(' ','_');ov[n]={'20 ML':document.getElementById('p_'+id+'_20').value,'50 ML':document.getElementById('p_'+id+'_50').value,'100 ML':document.getElementById('p_'+id+'_100').value}});save(STORAGE_PRICES,ov);applyPrices();m50RenderAdmin();alert('Prices saved.')};
+ window.m50SavePrices=async function(){const ov=read(STORAGE_PRICES,{});try{for(const n of ['M50 WANTED','COOL WATER','FLORA']){const id=n.replaceAll(' ','_');const vals={'20 ML':document.getElementById('p_'+id+'_20').value,'50 ML':document.getElementById('p_'+id+'_50').value,'100 ML':document.getElementById('p_'+id+'_100').value};ov[n]=vals;const row=await m50EnsureBaseRow(n);await m50SupabaseUpdate(row.id,{price20:Number(vals['20 ML']),price50:Number(vals['50 ML']),price100:Number(vals['100 ML'])});}save(STORAGE_PRICES,ov);applyPrices();m50RenderAdmin();alert('Prices saved everywhere.')}catch(e){save(STORAGE_PRICES,ov);applyPrices();alert('Prices saved locally, but Supabase sync failed: '+e.message)}};
 
  function renderExistingPrices(){const box=document.getElementById('m50ExistingPrices'),p=allProducts();box.innerHTML='';['M50 WANTED','COOL WATER','FLORA'].forEach(n=>{const id=n.replaceAll(' ','_'),x=p[n];box.insertAdjacentHTML('beforeend','<div class="m50-admin-card"><h4>'+esc(n)+'</h4><div class="m50-admin-row"><label>20 ML<input id="p_'+id+'_20" type="number" min="0" value="'+esc(x['20 ML'])+'"></label><label>50 ML<input id="p_'+id+'_50" type="number" min="0" value="'+esc(x['50 ML'])+'"></label><label>100 ML<input id="p_'+id+'_100" type="number" min="0" value="'+esc(x['100 ML'])+'"></label><button class="m50-admin-btn primary" onclick="m50SavePrices()">Save</button></div></div>')})}
 
  function renderExistingGallery(){const box=document.getElementById('m50ExistingGallery'),ov=read(STORAGE_GALLERY,{});box.innerHTML='';['M50 WANTED','COOL WATER','FLORA'].forEach(n=>{const key=n.toLowerCase().replaceAll(' ','_');const current=ov[key]||{};box.insertAdjacentHTML('beforeend','<div class="m50-admin-card"><h4>'+esc(n)+'</h4><div class="m50-admin-grid"><div><label>Thumbnail image</label><input id="thumb_'+key+'" type="file" accept="image/*"><div class="m50-file-note">Card image only; it will not be added to View Photos.</div></div><div><label>View Photos gallery</label><input id="gal_'+key+'" type="file" accept="image/*" multiple><div class="m50-file-note">Select one or more photos. These replace the current gallery.</div></div></div><div class="m50-gallery-preview" id="preview_'+key+'">'+(current.thumb?'<img src="'+current.thumb+'">':'')+(current.gallery||[]).map(src=>'<img src="'+src+'">').join('')+'</div><button class="m50-admin-btn primary" style="margin-top:10px" onclick="m50SaveGallery('+JSON.stringify(key)+','+JSON.stringify(n)+')">Save Gallery</button></div>')})}
- window.m50SaveGallery=async function(key,name){const t=document.getElementById('thumb_'+key).files[0],g=document.getElementById('gal_'+key).files;const ov=read(STORAGE_GALLERY,{}),old=ov[key]||{};if(t)old.thumb=await dataURL(t);if(g&&g.length)old.gallery=await filesToData(g);ov[key]=old;save(STORAGE_GALLERY,ov);applyGalleryOverrides();renderExistingGallery();alert(name+' gallery saved.')};
+ window.m50SaveGallery=async function(key,name){const t=document.getElementById('thumb_'+key).files[0],g=document.getElementById('gal_'+key).files;const ov=read(STORAGE_GALLERY,{}),old=ov[key]||{};if(t)old.thumb=await dataURL(t);if(g&&g.length)old.gallery=await filesToData(g);ov[key]=old;save(STORAGE_GALLERY,ov);try{const row=await m50EnsureBaseRow(name);await m50SupabaseUpdate(row.id,{thumbnail:old.thumb||'',gallery:old.gallery||[]});}catch(e){alert('Gallery saved locally, but Supabase sync failed: '+e.message);return}applyGalleryOverrides();renderExistingGallery();alert(name+' gallery saved everywhere.')};
  function applyGalleryOverrides(){const ov=read(STORAGE_GALLERY,{});Object.keys(ov).forEach(key=>{const name=key.replaceAll('_',' ').toUpperCase();const x=ov[key];if(typeof galleries!=='undefined'&&x.gallery&&x.gallery.length)galleries[key]=x.gallery;document.querySelectorAll('.card').forEach(card=>{const h=card.querySelector('h3');if(!h||h.textContent.trim().toUpperCase()!==name)return;const img=card.querySelector('.cardimg');if(img&&x.thumb)img.src=x.thumb;const btn=card.querySelector('.gallerybtn');if(btn)btn.setAttribute('onclick',"openGallery("+JSON.stringify(key)+")")})})}
 
  function m50ImageData(file,maxSide=900,quality=.78){
@@ -437,6 +498,8 @@ window.m50AddProduct=async function(){
     const files=Array.from(document.getElementById('m50NewGallery').files||[]);
     const gallery=await Promise.all(files.map(f=>m50ImageData(f)));
     const item={name,category:document.getElementById('m50NewCategory').value,desc:document.getElementById('m50NewDesc').value,note1:document.getElementById('m50NewNote1').value,note2:document.getElementById('m50NewNote2').value,note3:document.getElementById('m50NewNote3').value,thumb,gallery,prices:{'20 ML':p20,'50 ML':p50,'100 ML':p100}};
+    const dbOut=await m50SupabaseInsert({name,category:item.category,description:item.desc,note1:item.note1,note2:item.note2,note3:item.note3,price20:Number(p20),price50:Number(p50),price100:Number(p100),thumbnail:item.thumb||'',gallery:item.gallery||[]});
+    item.supabase_id=Array.isArray(dbOut)?dbOut[0]?.id:dbOut?.id;
     products.push(item); save(STORAGE_PRODUCTS,products);
     const pov=read(STORAGE_PRICES,{});pov[name]=item.prices;save(STORAGE_PRICES,pov);
     m50RenderCustomProducts();m50RenderCustomCards();applyPrices();
@@ -452,12 +515,12 @@ window.m50AddProduct=async function(){
   box.innerHTML=base+added || '<span style="color:#999">No products.</span>';
  };
  window.m50ToggleBaseProduct=function(name){const a=hiddenProducts(),i=a.findIndex(x=>String(x).toLowerCase()===name.toLowerCase());if(i>=0)a.splice(i,1);else a.push(name);save(STORAGE_HIDDEN,a);m50RenderCustomProducts();applyHiddenProducts();};
- window.m50DeleteProduct=function(i){const a=read(STORAGE_PRODUCTS,[]);const x=a[i];if(!x)return;if(!confirm('Remove '+x.name+'?'))return;a.splice(i,1);save(STORAGE_PRODUCTS,a);const p=read(STORAGE_PRICES,{});delete p[x.name];save(STORAGE_PRICES,p);m50RenderCustomProducts();m50RenderCustomCards();applyPrices();};
+ window.m50DeleteProduct=async function(i){const a=read(STORAGE_PRODUCTS,[]);const x=a[i];if(!x)return;if(!confirm('Remove '+x.name+'?'))return;try{if(x.supabase_id)await m50SupabaseDelete(x.supabase_id);else{const row=await m50SupabaseFindByName(x.name);if(row)await m50SupabaseDelete(row.id)}}catch(e){alert('Delete failed: '+e.message);return}a.splice(i,1);save(STORAGE_PRODUCTS,a);const p=read(STORAGE_PRICES,{});delete p[x.name];save(STORAGE_PRICES,p);m50RenderCustomProducts();m50RenderCustomCards();applyPrices();};
  window.m50ResetCustomProducts=function(){if(confirm('Remove all added products?')){save(STORAGE_PRODUCTS,[]);m50RenderCustomProducts();m50RenderCustomCards();alert('Added products removed.')}};
  window.m50RenderAdmin=function(){renderExistingPrices();renderExistingGallery();m50RenderCustomProducts()};
 
  // Apply saved edits on page load.
- setTimeout(()=>{applyPrices();applyGalleryOverrides();m50RenderCustomCards();m50BindCustomTouch();applyHiddenProducts()},0);
+ setTimeout(async()=>{const ok=await m50SyncFromSupabase();applyPrices();applyGalleryOverrides();m50RenderCustomCards();m50BindCustomTouch();applyHiddenProducts();if(!ok)console.warn('M50 is offline/local until Supabase Data API exposure is enabled.');},0);
 
   function m50GalleryStoreKey(name){ return 'm50_gallery_override_' + name; }
   function m50ReadGallery(name){
